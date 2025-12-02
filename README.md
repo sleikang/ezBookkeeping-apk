@@ -58,9 +58,6 @@ Compared with using the web version in a browser, this client delivers a more na
 
 This repository provides an easily installable Android APK for users who want a better mobile experience when using ezBookkeeping.
 
-Screenshots (Optional)
-
-You may add screenshots here.
 
 Installation
 
