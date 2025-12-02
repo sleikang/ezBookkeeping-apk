@@ -21,9 +21,10 @@ ezBookkeeping
 
 本仓库主要提供 Android 可安装版本（APK），用于快速部署和体验 ezBookkeeping 的移动客户端。
 
-截图（可选）
+截图
 
-可以放几张应用界面截图。
+![7bcd24ab3d9a8579d82070107e310314](https://github.com/user-attachments/assets/a2ec797c-6942-4e65-b51a-7a47b0fa3c7e)
+
 
 安装
 
