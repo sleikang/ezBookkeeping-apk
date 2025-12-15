@@ -6,7 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
-import android.graphics.Color
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -19,7 +19,6 @@ import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import com.example.ezbookkeeping.databinding.ActivityMainBinding
@@ -31,20 +30,23 @@ import android.os.Environment
 import android.webkit.CookieManager
 import android.util.Base64
 import java.io.File
+import androidx.core.content.edit
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val prefsName = "EzBookkeepingPrefs"
     private val urlKey = "savedUrl"
+    private var viewTheme: String? = null
+    private var homeUrl: String? = null
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     companion object {
-        private const val PERMISSION_REQUEST_CODE = 123 // You can use any integer value
+        private const val PERMISSION_REQUEST_CODE = 123
     }
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
+        if (result.resultCode == RESULT_OK) {
             val uris = result.data?.data?.let { arrayOf(it) }
             filePathCallback?.onReceiveValue(uris)
         } else {
@@ -56,7 +58,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
+        val nightModeFlags = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        val isSystemDark = nightModeFlags == Configuration.UI_MODE_NIGHT_YES
+        viewTheme = if (isSystemDark) "dark" else "light"
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -66,7 +70,7 @@ class MainActivity : AppCompatActivity() {
             WebView.setWebContentsDebuggingEnabled(true)
         }
 
-        val sharedPreferences = getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+        val sharedPreferences = getSharedPreferences(prefsName, MODE_PRIVATE)
         val savedUrl = sharedPreferences.getString(urlKey, null)
 
         if (savedUrl != null) {
@@ -98,19 +102,13 @@ class MainActivity : AppCompatActivity() {
         binding.enterButton.setOnClickListener {
             var url = binding.urlEditText.text.toString().trim()
             if (url.isNotEmpty()) {
-
                 if (!url.startsWith("http://") && !url.startsWith("https://")) {
                     url = "https://$url"
                 }
-
-                // Save URL
-                val sharedPreferences = getSharedPreferences(prefsName, Context.MODE_PRIVATE)
-                with(sharedPreferences.edit()) {
+                val sharedPreferences = getSharedPreferences(prefsName, MODE_PRIVATE)
+                sharedPreferences.edit {
                     putString(urlKey, url)
-                    apply()
                 }
-
-                // Load WebView
                 setupAndLoadWebView(url)
             } else {
                 binding.urlInputLayout.error = "网址不能为空"
@@ -121,7 +119,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupAndLoadWebView(url: String) {
         binding.urlInputContainer.visibility = View.GONE
         binding.webView.visibility = View.VISIBLE
-
+        homeUrl = url
         setupWebViewSettings()
         binding.webView.loadUrl(url)
     }
@@ -146,7 +144,6 @@ class MainActivity : AppCompatActivity() {
             loadWithOverviewMode = true
             cacheMode = WebSettings.LOAD_DEFAULT
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            databaseEnabled = true
             setGeolocationEnabled(true)
         }
 
@@ -176,6 +173,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                view?.evaluateJavascript(getThemeObserverScript(), null)
+            }
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url.toString()
                 view?.loadUrl(url)
@@ -215,7 +216,7 @@ class MainActivity : AppCompatActivity() {
                     Environment.DIRECTORY_DOWNLOADS,
                     URLUtil.guessFileName(url, contentDisposition, mimetype)
                 )
-                val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
                 dm.enqueue(request)
 
                 // (可选) 给用户一个提示
@@ -227,7 +228,58 @@ class MainActivity : AppCompatActivity() {
 
         binding.webView.setOnLongClickListener { true }
     }
+    private fun getThemeObserverScript(): String {
+        // 关键常量：localStorage 键名
+        val settingsKey = "ebk_app_settings"
 
+        // 注入的 JavaScript 代码
+        val script = """
+    (function() {
+        // 确保 AndroidBridge 接口可用
+        if (typeof window.AndroidBridge === 'undefined' || typeof window.AndroidBridge.updateTheme !== 'function') {
+            console.warn("AndroidBridge not found. Theme monitoring aborted.");
+            return;
+        }
+
+        // 引入局部状态变量来追踪上次报告的主题
+        let lastTheme = null; 
+        
+        // 监控间隔时间（毫秒）
+        const POLLING_INTERVAL = 1000; 
+
+        function checkThemeChange() {
+            let currentTheme = 'system';
+            
+            try {
+                const storageData = localStorage.getItem('$settingsKey');
+                if (!storageData || storageData === '{}') {
+                    currentTheme = 'auto'; 
+                } else {
+                    const settings = JSON.parse(storageData);
+                    currentTheme = settings.theme || 'auto'; 
+                }
+            } catch (error) {
+                console.error("Error reading theme from localStorage:", error);
+                return; 
+            }
+
+            if (currentTheme !== lastTheme) {
+                lastTheme = currentTheme;
+                window.AndroidBridge.updateTheme(currentTheme);
+            }
+        }
+        checkThemeChange();
+        if (window.themeMonitorInterval) {
+            clearInterval(window.themeMonitorInterval);
+        }
+        window.themeMonitorInterval = setInterval(checkThemeChange, POLLING_INTERVAL);
+        window.addEventListener('beforeunload', function() {
+            clearInterval(window.themeMonitorInterval);
+        });
+    })();
+    """.trimIndent()
+        return script
+    }
     private fun checkAndRequestPermissions() {
         val permissionsToRequest = mutableListOf<String>()
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
@@ -270,6 +322,11 @@ class MainActivity : AppCompatActivity() {
     inner class WebAppInterface {
         @android.webkit.JavascriptInterface
         fun updateTheme(theme: String) {
+            val normalizedTheme = theme.lowercase()
+
+            if (normalizedTheme == viewTheme) {
+                return
+            }
             runOnUiThread {
                 val nightModeFlags = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
                 val isSystemDark = nightModeFlags == Configuration.UI_MODE_NIGHT_YES
@@ -288,9 +345,12 @@ class MainActivity : AppCompatActivity() {
                 controller.isAppearanceLightStatusBars = !isDarkMode
                 controller.isAppearanceLightNavigationBars = !isDarkMode
 
-                if (binding.webView.url != null) {
+                if (homeUrl != null) {
+                    binding.webView.loadUrl(homeUrl!!)
+                } else {
                     binding.webView.reload()
                 }
+                viewTheme = normalizedTheme
             }
         }
     }
@@ -308,9 +368,7 @@ class MainActivity : AppCompatActivity() {
                 (context as Activity).runOnUiThread {
                     android.widget.Toast.makeText(context, "下载完成: $filename", android.widget.Toast.LENGTH_LONG).show()
                 }
-                val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
-                mediaScanIntent.data = Uri.fromFile(file)
-                context.sendBroadcast(mediaScanIntent)
+                MediaScannerConnection.scanFile(context, arrayOf(file.toString()), null, null)
 
             } catch (e: Exception) {
                 e.printStackTrace()
